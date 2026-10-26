@@ -30,10 +30,43 @@ let localArchive = {};
 let localItemImages = {};
 let localBalance = 0;
 let localBalanceLogs = [];
+const DEFAULT_SALES_CATEGORIES = [
+    { id: 'cat1', name: 'Generica',  icon: '🧰', enabled: true },
+    { id: 'cat2', name: 'Compatte',  icon: '🚗', enabled: true },
+    { id: 'cat3', name: 'Sportive',  icon: '🏎️', enabled: true },
+    { id: 'cat4', name: 'Offroad',   icon: '🚙', enabled: true },
+    { id: 'cat5', name: 'Moto',      icon: '🏍️', enabled: true }
+];
 let localSettings = {
     freeSalesEnabled: false,
-    freeSalesForgePct: 40
+    freeSalesForgePct: 40,
+    salesCategories: DEFAULT_SALES_CATEGORIES.map(c => Object.assign({}, c))
 };
+let currentSalesCategory = 'cat1';
+
+function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+// Unisce le categorie salvate con i default (sempre 5 categorie)
+function getSalesCategories() {
+    const saved = Array.isArray(localSettings.salesCategories) ? localSettings.salesCategories : [];
+    return DEFAULT_SALES_CATEGORIES.map(def => {
+        const s = saved.find(x => x && x.id === def.id) || {};
+        return {
+            id: def.id,
+            name: (s.name && String(s.name).trim()) ? String(s.name).trim() : def.name,
+            icon: def.icon,
+            enabled: s.enabled !== false
+        };
+    });
+}
+function getCategoryName(id) {
+    const c = getSalesCategories().find(x => x.id === id);
+    return c ? c.name : 'Altro';
+}
+function getItemCategory(item) {
+    return (item && item.category) ? item.category : 'cat1';
+}
 
 // DOM
 const loginPage = document.getElementById('login-page');
@@ -388,6 +421,7 @@ document.getElementById('smart-modal-form').addEventListener('submit', (e) => {
             const forgeGain = priceWithoutPct * (freePct / 100);
             const finalTotalPrice = priceWithoutPct + forgeGain;
             const employeeGain = forgeGain * (empPct / 100);
+            saleData.category = currentSalesCategory;
             saleData.serviceName = "[LIBERO] " + name;
             saleData.totalPrice = finalTotalPrice;
             saleData.priceWithoutPct = priceWithoutPct;
@@ -403,6 +437,7 @@ document.getElementById('smart-modal-form').addEventListener('submit', (e) => {
             const finalForgeCost = (item.cost || 0) * qty;
             const forgeGain = finalTotalPrice - finalForgeCost;
             const employeeGain = (forgeGain * empPct) / 100;
+            saleData.category = getItemCategory(item);
             saleData.serviceName = item.name;
             saleData.totalPrice = finalTotalPrice;
             saleData.forgeCost = finalForgeCost;
@@ -425,6 +460,7 @@ document.getElementById('smart-modal-form').addEventListener('submit', (e) => {
                     employeeId: empId,
                     employeeName: localEmployees[empId]?.name || saleData.employeeName || '—',
                     detail: saleData.serviceName + (qty > 1 ? ' x' + qty : ''),
+                    category: saleData.category || 'cat1',
                     relatedSaleId: saleRef.id
                 });
                 return batch.commit();
@@ -720,6 +756,8 @@ function refreshActiveSectionUI() {
             if (typeof renderInventoryLogs === 'function') renderInventoryLogs();
             break;
         case 'admin':
+            if (typeof renderCatalogCategorySelects === 'function') renderCatalogCategorySelects();
+            if (typeof renderSalesCategoriesAdmin === 'function') renderSalesCategoriesAdmin();
             if (typeof renderCatalog === 'function') renderCatalog();
             if (typeof renderEmployees === 'function') renderEmployees();
             if (typeof renderCustomStashesList === 'function') renderCustomStashesList();
@@ -793,7 +831,10 @@ function initDatabaseListeners() {
                 if (typeof renderSalesDropdowns === 'function') renderSalesDropdowns();
                 if (typeof renderQuickSalesGrid === 'function') renderQuickSalesGrid();
             }
-            if (isAdminOpen() && typeof renderCatalog === 'function') renderCatalog();
+            if (isAdminOpen()) {
+                if (typeof renderSalesCategoriesAdmin === 'function') renderSalesCategoriesAdmin();
+                if (typeof renderCatalog === 'function') renderCatalog();
+            }
         });
     });
 
@@ -856,9 +897,11 @@ function initDatabaseListeners() {
                 const d = doc.data() || {};
                 localSettings.freeSalesEnabled = !!d.freeSalesEnabled;
                 localSettings.freeSalesForgePct = (d.freeSalesForgePct != null) ? parseFloat(d.freeSalesForgePct) : 40;
+                localSettings.salesCategories = Array.isArray(d.salesCategories) ? d.salesCategories : DEFAULT_SALES_CATEGORIES.map(c => Object.assign({}, c));
             } else {
                 localSettings.freeSalesEnabled = false;
                 localSettings.freeSalesForgePct = 40;
+                localSettings.salesCategories = DEFAULT_SALES_CATEGORIES.map(c => Object.assign({}, c));
             }
             scheduleUI(function () {
                 if (typeof applySettingsToAdminUI === 'function') applySettingsToAdminUI();
@@ -1324,10 +1367,46 @@ function renderSalesDropdowns() {
 }
 
 // --- VENDITE ---
+function renderSalesCategoryTabs() {
+    const wrap = document.getElementById('sales-category-tabs');
+    if (!wrap) return;
+    const cats = getSalesCategories().filter(c => c.enabled);
+    if (cats.length === 0) { wrap.innerHTML = ''; return; }
+    if (!cats.some(c => c.id === currentSalesCategory)) currentSalesCategory = cats[0].id;
+    wrap.innerHTML = cats.map(c => {
+        const active = c.id === currentSalesCategory;
+        const count = Object.values(localCatalog).filter(it => getItemCategory(it) === c.id).length;
+        const cls = active
+            ? 'nav-active'
+            : 'bg-gray-700 text-gray-200 hover:bg-gray-600';
+        return `<button type="button" onclick="window.setSalesCategory('${c.id}')" class="px-3 py-2 rounded-xl ${cls} font-medium transition text-sm">${c.icon} ${escHtml(c.name)} <span class="text-[10px] opacity-70 ml-1">(${count})</span></button>`;
+    }).join('');
+}
+
+window.setSalesCategory = function(id) {
+    currentSalesCategory = id;
+    renderQuickSalesGrid();
+    renderSalesTable();
+    renderSalesArchiveWindow(localArchive);
+    updateSalesCategoryTitles();
+};
+
+function updateSalesCategoryTitles() {
+    const name = getCategoryName(currentSalesCategory);
+    document.querySelectorAll('.sales-cat-title').forEach(el => { el.textContent = name; });
+}
+
 function renderQuickSalesGrid() {
     const grid = document.getElementById('quick-sales-grid');
     if (!grid) return;
+    renderSalesCategoryTabs();
+    updateSalesCategoryTitles();
     grid.innerHTML = '';
+    const cats = getSalesCategories().filter(c => c.enabled);
+    if (cats.length === 0) {
+        grid.innerHTML = `<div class="col-span-full text-center py-6 text-gray-500 text-sm">Nessuna categoria di vendita attiva. Il gestore deve attivarle in Gestione.</div>`;
+        return;
+    }
     // Vendita libera solo se abilitata dal gestore (o se sei gestore)
     if (localSettings.freeSalesEnabled || userRole === 'gestore') {
         const pctLabel = (localSettings.freeSalesForgePct != null) ? localSettings.freeSalesForgePct : 40;
@@ -1339,17 +1418,20 @@ function renderQuickSalesGrid() {
             </div>
         `;
     }
-    Object.keys(localCatalog).forEach(id => {
+    const ids = Object.keys(localCatalog).filter(id => getItemCategory(localCatalog[id]) === currentSalesCategory);
+    ids.forEach(id => {
         const item = localCatalog[id];
         grid.innerHTML += `
             <div onclick="openSmartModal('sale_catalog', '${id}')" class="bg-gray-900 border border-gray-700 rounded-xl p-3 cursor-pointer hover:border-amber-500 transition min-h-[100px] flex flex-col justify-between">
-                <span class="text-sm font-bold text-amber-400 leading-tight">${item.name}</span>
+                <span class="text-sm font-bold text-amber-400 leading-tight">${escHtml(item.name)}</span>
                 <span class="text-xs text-emerald-400 font-semibold mt-2">${formatValuta(item.price)}</span>
             </div>
         `;
     });
-    if (Object.keys(localCatalog).length === 0 && !localSettings.freeSalesEnabled && userRole !== 'gestore') {
-        grid.innerHTML = `<div class="col-span-full text-center py-6 text-gray-500 text-sm">Nessun servizio in catalogo. Il gestore deve aggiungerli in Gestione.</div>`;
+    if (ids.length === 0 && !localSettings.freeSalesEnabled && userRole !== 'gestore') {
+        grid.innerHTML = `<div class="col-span-full text-center py-6 text-gray-500 text-sm">Nessun articolo in questa categoria. Il gestore deve aggiungerli in Gestione.</div>`;
+    } else if (ids.length === 0) {
+        grid.innerHTML += `<div class="col-span-full text-center py-4 text-gray-500 text-xs">Nessun articolo in "${escHtml(getCategoryName(currentSalesCategory))}". Aggiungili da Gestione → Catalogo.</div>`;
     }
 }
 
@@ -1362,8 +1444,9 @@ function renderSalesTable() {
     let sales = Object.keys(localSales).map(k => ({ id: k, ...localSales[k] }));
     sales.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
     if (filterVal !== 'all') sales = sales.filter(s => s.employeeKey === filterVal);
+    sales = sales.filter(s => getItemCategory(s) === currentSalesCategory);
     if (sales.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-gray-500 text-xs">Nessuna vendita corrente.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-gray-500 text-xs">Nessuna vendita corrente in "${escHtml(getCategoryName(currentSalesCategory))}".</td></tr>`;
         return;
     }
     sales.forEach(sale => {
@@ -1434,10 +1517,11 @@ function renderSalesArchiveWindow(archiveList) {
         Object.keys(item.sales || {}).forEach(sk => {
             const s = item.sales[sk];
             if (filterVal !== 'all' && s.employeeKey !== filterVal) return;
+            if (getItemCategory(s) !== currentSalesCategory) return;
             count++;
             salesHtml += `<div class="text-[11px] text-gray-400 py-0.5">${s.dateString} — <b class="text-amber-400">${s.serviceName}</b> x${s.quantity || 1} · ${formatValuta(s.totalPrice)} · Dip: ${s.employeeName}</div>`;
         });
-        if (count === 0 && filterVal !== 'all') return;
+        if (count === 0) return;
         container.innerHTML += `
             <div class="p-3 bg-gray-800/80 rounded-xl border border-gray-700">
                 <p class="font-bold text-sm text-gray-200 mb-2">${item.title}</p>
@@ -1445,6 +1529,9 @@ function renderSalesArchiveWindow(archiveList) {
             </div>
         `;
     });
+    if (!container.innerHTML.trim()) {
+        container.innerHTML = `<p class="text-xs text-gray-500 italic">Nessun archivio per "${escHtml(getCategoryName(currentSalesCategory))}".</p>`;
+    }
 }
 
 document.getElementById('archive-window-employee-filter')?.addEventListener('change', () => renderSalesArchiveWindow(localArchive));
@@ -1457,6 +1544,9 @@ function applySettingsToAdminUI() {
     const pct = document.getElementById('settings-free-sales-pct');
     if (en) en.checked = !!localSettings.freeSalesEnabled;
     if (pct) pct.value = (localSettings.freeSalesForgePct != null) ? localSettings.freeSalesForgePct : 40;
+    if (typeof renderSalesCategoriesAdmin === 'function') renderSalesCategoriesAdmin();
+    if (typeof renderCatalogCategorySelects === 'function') renderCatalogCategorySelects();
+    if (typeof renderCatalog === 'function') renderCatalog();
 }
 
 document.getElementById('settings-save-btn')?.addEventListener('click', () => {
@@ -1483,23 +1573,97 @@ document.getElementById('settings-save-btn')?.addEventListener('click', () => {
     }).catch(err => showToast(err.message, "error"));
 });
 
+// --- CATEGORIE VENDITA (gestore) ---
+function renderSalesCategoriesAdmin() {
+    const box = document.getElementById('sales-categories-admin');
+    if (!box) return;
+    // non sovrascrivere mentre il gestore sta scrivendo
+    if (box.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
+    box.innerHTML = getSalesCategories().map((c, i) => {
+        const count = Object.values(localCatalog).filter(it => getItemCategory(it) === c.id).length;
+        return `
+        <div class="flex flex-col sm:flex-row sm:items-center gap-2 bg-gray-900 p-3 rounded-xl border border-gray-700">
+            <span class="text-xs font-bold text-gray-400 w-24 shrink-0">${c.icon} Pagina ${i + 1}</span>
+            <input type="text" data-cat-name="${c.id}" value="${escHtml(c.name)}" maxlength="30" placeholder="Nome categoria" class="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500">
+            <span class="text-[11px] text-gray-500 whitespace-nowrap">${count} articoli</span>
+            <label class="inline-flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" data-cat-enabled="${c.id}" ${c.enabled ? 'checked' : ''} class="rounded text-amber-500 w-4 h-4">
+                <span class="text-xs text-gray-200">Attiva</span>
+            </label>
+        </div>`;
+    }).join('');
+}
+
+document.getElementById('sales-categories-save-btn')?.addEventListener('click', () => {
+    if (userRole !== 'gestore') {
+        showToast("Solo il gestore può modificare le categorie.", "error");
+        return;
+    }
+    const cats = getSalesCategories().map(c => {
+        const nameEl = document.querySelector(`[data-cat-name="${c.id}"]`);
+        const enEl = document.querySelector(`[data-cat-enabled="${c.id}"]`);
+        const name = nameEl ? nameEl.value.trim() : c.name;
+        return { id: c.id, name: name || c.name, icon: c.icon, enabled: enEl ? !!enEl.checked : true };
+    });
+    if (!cats.some(c => c.enabled)) {
+        showToast("Lascia almeno una categoria attiva.", "warning");
+        return;
+    }
+    const status = document.getElementById('sales-categories-status');
+    db.collection('settings').doc('app').set({ salesCategories: cats, updatedAt: Date.now() }, { merge: true })
+        .then(() => {
+            if (status) {
+                status.classList.remove('hidden');
+                status.textContent = 'Categorie salvate: ' + cats.filter(c => c.enabled).map(c => c.name).join(' · ');
+            }
+            showToast("Categorie di vendita salvate.", "success");
+        })
+        .catch(err => showToast(err.message, "error"));
+});
+
+function renderCatalogCategorySelects() {
+    const cats = getSalesCategories();
+    const sel = document.getElementById('catalog-category');
+    if (sel) {
+        const v = sel.value || 'cat1';
+        sel.innerHTML = cats.map(c => `<option value="${c.id}">${c.icon} ${escHtml(c.name)}${c.enabled ? '' : ' (disattivata)'}</option>`).join('');
+        sel.value = cats.some(c => c.id === v) ? v : 'cat1';
+    }
+    const filter = document.getElementById('catalog-category-filter');
+    if (filter) {
+        const v = filter.value || 'all';
+        filter.innerHTML = `<option value="all">📋 Tutte le categorie</option>` +
+            cats.map(c => `<option value="${c.id}">${c.icon} ${escHtml(c.name)}</option>`).join('');
+        filter.value = (v === 'all' || cats.some(c => c.id === v)) ? v : 'all';
+    }
+}
+document.getElementById('catalog-category-filter')?.addEventListener('change', () => renderCatalog());
+
 function renderCatalog() {
     const tbody = document.getElementById('catalog-table-body');
     if (!tbody) return;
+    if (!document.getElementById('catalog-category')?.options.length) renderCatalogCategorySelects();
     tbody.innerHTML = '';
-    const keys = Object.keys(localCatalog);
+    const filterVal = document.getElementById('catalog-category-filter')?.value || 'all';
+    const cats = getSalesCategories();
+    const keys = Object.keys(localCatalog).filter(k => filterVal === 'all' || getItemCategory(localCatalog[k]) === filterVal);
     if (keys.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="4" class="p-3 text-center text-gray-500 text-xs">Nessun servizio in catalogo.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" class="p-3 text-center text-gray-500 text-xs">Nessun articolo in catalogo${filterVal !== 'all' ? ' per questa categoria' : ''}.</td></tr>`;
         return;
     }
     keys.forEach(key => {
         const item = localCatalog[key];
+        const cur = getItemCategory(item);
+        const opts = cats.map(c => `<option value="${c.id}" ${c.id === cur ? 'selected' : ''}>${c.icon} ${escHtml(c.name)}</option>`).join('');
         tbody.innerHTML += `
             <tr class="hover:bg-gray-700/60 border-b border-gray-700 text-xs">
-                <td class="p-2 font-bold text-amber-400">${item.name}</td>
+                <td class="p-2 font-bold text-amber-400">${escHtml(item.name)}</td>
                 <td class="p-2 text-emerald-400">${formatValuta(item.price)}</td>
                 <td class="p-2 text-gray-400">${formatValuta(item.cost || 0)}</td>
-                <td class="p-2 text-right space-x-1">
+                <td class="p-2">
+                    <select onchange="window.setCatalogCategory('${key}', this.value)" class="px-2 py-1 bg-gray-700 border border-gray-600 rounded-lg text-[11px] text-gray-200 focus:outline-none focus:border-amber-500">${opts}</select>
+                </td>
+                <td class="p-2 text-right space-x-1 whitespace-nowrap">
                     <button onclick="window.editCatalogItem('${key}')" class="p-1.5 bg-amber-500/20 text-amber-400 rounded-lg hover:bg-amber-500 hover:text-gray-900 transition" title="Modifica"><i class="fa-solid fa-pen text-[10px]"></i></button>
                     <button onclick="window.deleteCatalogItem('${key}')" class="p-1.5 bg-red-600/20 text-red-400 rounded-lg hover:bg-red-600 hover:text-white transition" title="Elimina"><i class="fa-solid fa-trash text-[10px]"></i></button>
                 </td>
@@ -1508,24 +1672,40 @@ function renderCatalog() {
     });
 }
 
+window.setCatalogCategory = function(key, catId) {
+    if (userRole !== 'gestore') return;
+    db.collection('catalog').doc(key).set({ category: catId }, { merge: true })
+        .then(() => showToast(`Spostato in "${getCategoryName(catId)}".`, "success"))
+        .catch(err => showToast(err.message, "error"));
+};
+
 document.getElementById('catalog-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const id = document.getElementById('catalog-id').value;
     const name = document.getElementById('catalog-name').value.trim();
     const price = parseFloat(document.getElementById('catalog-price').value);
     const cost = parseFloat(document.getElementById('catalog-cost').value);
+    const category = document.getElementById('catalog-category')?.value || 'cat1';
     if (!name || isNaN(price)) {
         showToast("Compila nome e prezzo.", "warning");
         return;
     }
-    const data = { name, price, cost: isNaN(cost) ? 0 : cost };
+    const data = { name, price, cost: isNaN(cost) ? 0 : cost, category };
+    const afterSave = (msg) => {
+        e.target.reset();
+        document.getElementById('catalog-id').value = '';
+        document.getElementById('catalog-submit-btn').textContent = 'Aggiungi al Catalogo';
+        const sel = document.getElementById('catalog-category');
+        if (sel) sel.value = category; // resta sulla categoria appena usata
+        showToast(msg, "success");
+    };
     if (id) {
         db.collection('catalog').doc(id).set(data, { merge: true })
-            .then(() => { e.target.reset(); document.getElementById('catalog-id').value = ''; document.getElementById('catalog-submit-btn').textContent = 'Aggiungi al Catalogo'; showToast("Catalogo aggiornato!", "success"); })
+            .then(() => afterSave("Catalogo aggiornato!"))
             .catch(err => showToast(err.message, "error"));
     } else {
         db.collection('catalog').add(data)
-            .then(() => { e.target.reset(); showToast("Servizio aggiunto!", "success"); })
+            .then(() => afterSave("Articolo aggiunto!"))
             .catch(err => showToast(err.message, "error"));
     }
 });
@@ -1537,6 +1717,8 @@ window.editCatalogItem = function(key) {
     document.getElementById('catalog-name').value = item.name || '';
     document.getElementById('catalog-price').value = item.price ?? '';
     document.getElementById('catalog-cost').value = item.cost ?? '';
+    const sel = document.getElementById('catalog-category');
+    if (sel) sel.value = getItemCategory(item);
     document.getElementById('catalog-submit-btn').textContent = 'Salva Modifiche';
 };
 
